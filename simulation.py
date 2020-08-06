@@ -33,15 +33,9 @@ def apply_boundary(p):
     """
     # i is x, y, z while j is particle 1, particle 2...
 
-    # p[p > 1] -= 2
-    # p[p < 1] += 2
+    p[p > 1] -= 2
+    p[p < -1] += 2
 
-    for i in range(n_dimensions):
-        for j in range(n_particles):
-            if p[i, j] > 1:
-                p[i, j] -= 2
-            elif p[i, j] < -1:
-                p[i, j] += 2
     return p
 
 
@@ -61,7 +55,7 @@ def apply_force(p, v):
             if n == m:
                 continue
             distance_factor += (p[:, m] - p[:, n]) / (np.linalg.norm(p[:, m] - p[:, n])**n_dimensions + radius_buffer)
-        v[:, m] += - G * distance_factor
+        v[:, m] += - G * distance_factor * dt
 
     return p, v
 
