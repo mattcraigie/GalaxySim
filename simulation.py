@@ -9,32 +9,31 @@ np.random.seed(4080)
 # possible extensions: gaussian (or otherwise) mass distribution for each particle
 
 
-# Setup
-n_dimensions = 2
-n_particles = 5
-n_frames = 100
+# Sim setup
+n_dimensions = 3
+n_particles = 10
+n_frames = 300
 frame_duration = 100
-v_max = 0.01  # maximum drift velocity (distance per timestep)
 dt = 1
 
 # physical quantities
 particle_mass = 1
 radius_buffer = 0.1
 G = 1e-4
+v_max = 0.03  # starting maximum velocity for the particles
+side_length = 1
+
 
 # Set initial positions and velocities
-position = 1 - 2 * np.random.random((n_dimensions, n_particles))
-velocity = v_max * (1 - 2 * np.random.random((n_dimensions, n_particles)))
+position = 0.5 * side_length - side_length * np.random.random((n_dimensions, n_particles))
+velocity = v_max * (0.5 * side_length - side_length * np.random.random((n_dimensions, n_particles)))
 
 
 def apply_boundary(p):
     """Defines the boundary conditions - we want a periodic boundary
-    todo: un-hard code the periodic number
     """
-    # i is x, y, z while j is particle 1, particle 2...
-
-    p[p > 1] -= 2
-    p[p < -1] += 2
+    p[p > side_length/2] -= side_length
+    p[p < -side_length/2] += side_length
 
     return p
 
@@ -45,7 +44,6 @@ def apply_force(p, v):
 
     the change in velocity (i.e. acceleration) particle m is determined by its interaction with n
     """
-
 
     for m in range(n_particles):
         # particle-particle interaction
@@ -59,13 +57,12 @@ def apply_force(p, v):
 
     return p, v
 
-    # normal denominator plus a small num
 
 # Set the axes on which the points will be shown
 plt.ion() # Set interactive mode on
 fig, ax = plt.subplots(figsize=(8, 8))
-ax.set_xlim(-1, 1)
-ax.set_ylim(-1, 1)
+ax.set_xlim(-side_length*0.5, side_length*0.5)
+ax.set_ylim(-side_length*0.5, side_length*0.5)
 
 
 # Create command which will plot the positions of the particles
@@ -83,14 +80,8 @@ def update(i):
 
 
 ani = FuncAnimation(fig, update, frames=n_frames)
-
-
 f = r"sim.mp4"
 writervideo = FFMpegWriter(fps=60)
 ani.save(f, writer=writervideo)
-
-plt.show()
-
-
 
 
