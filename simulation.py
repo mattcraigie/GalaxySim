@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, FFMpegWriter
+from scipy.fft import fftn, ifftn
 import matplotlib as mpl
 mpl.rcParams['animation.ffmpeg_path'] = r'C:\\Program Files (x86)\\FFMpeg\\bin\\ffmpeg.exe'
 
@@ -42,7 +43,7 @@ def apply_boundary(p):
     return p
 
 
-def apply_force_particle(p, v):
+def apply_force_pp(p, v):
     """Returns the velocity in km/s (weird)
 
     Defines the interactions - we want a softening length to avoid crazy big forces. It should be ~ the mean
@@ -64,39 +65,43 @@ def apply_force_particle(p, v):
     return p, v
 
 
-def apply_force_particle_mesh(p, v):
-    grid_num = 50
-    x = np.linspace(-1, 1, 50)
-    y = np.linspace(-1, 1, 50)
-    z = np.linspace(-1, 1, 50)
-    pos_grid = np.meshgrid(x, y, z)
-    mass_grid = np.zeros([grid_num] * n_dimensions)
-    H = side_length / grid_num
+def apply_force_pm(p, v):
+    cell_num = 50
+    rho = ngp(p, cell_num)
+    G = greens_function(cell_num)
+    rho_ft = fftn(rho)
+    phi_ft = G * rho_ft
+    phi = ifftn(phi_ft)
+    a = np.diff(phi) / (side_length / cell_num)
 
-    print(pos_grid)
-    print(mass_grid)
-    exit()
+    for j in range(n_particles):
+        grid_position = np.zeros(n_dimensions)
+        for i in range(n_dimensions):
+            grid_position[i] = x[argmin(positions[i, j] - x)]
+        v[:, j] += a[grid_position]
 
-    for i in range(n_particles):
-        diff = p[:, i] - pos_grid
-        p[:, i]
-
-    rho_grid = mass_grid / H**3
-
-def pm_mass_assignment_func(m, g, H):
+    return p, v
 
 
+def ngp(positions, cell_num):
+    """Gets a mass grid of the particles for a simple ngp method"""
+    x = (np.linspace(-0.5, 0.5, cell_num + 1) + 1 / cell_num)[:-1]
+    mass_grid = np.meshgrid(x, x, x)
+    for j in range(n_particles):
+        grid_position = np.zeros(n_dimensions)
+        for i in range(n_dimensions):
+            grid_position[i] = x[argmin(positions[i, j] - x)]
+        mass_grid[grid_position] += 1
+    mass_grid = mass_grid * particle_mass
+    return mass_grid
 
 
-    return m * W
-
-def ngp(d, H):
-    if d <= H/2:
-        return 1
-    else:
-        return 0
-
-
+def greens_function(cell_num):
+    k = 2 * np.pi * np.arange(0, cell_num + 1) / side_length
+    k_vec = np.array([k for i in range(n_dimensions)])
+    G = -3 / 8 * np.sum(np.sin(k_vec / 2) ** 2) ** -1
+    G[0, 0, 0] = 0
+    return G
 
 
 
@@ -116,7 +121,7 @@ def update(i):
     global position, velocity
     position += velocity * dt  # Increment positions according to their velocites
     position = apply_boundary(position)  # Apply boundary conditions
-    position, velocity = apply_force_particle_mesh(position, velocity)
+    position, velocity = apply_force_pm(position, velocity)
     points.set_data(position[0, :], position[1, :])  # Show 2D projection of first 2 position coordinates
     return points,
 
