@@ -18,7 +18,7 @@ km_to_pc = 3.240e-14
 # Sim setup
 n_dimensions = 3
 n_particles = 10
-n_frames = 1000
+n_frames = 10
 frame_duration = 100
 
 
@@ -29,6 +29,15 @@ v_max = 1000 * 1000                         # m/s
 side_length = 1e5 * 3.086e16                # in units of m
 radius_buffer = 0.1 * side_length           # in units of m
 dt = 3.154e+7 * 1e5                         # in units of seconds
+
+# physical quantities - everything SI
+# particle_mass = 1            # kg
+# G = 1                           # m^3 kg^-1 s^-2
+# v_max = 0.05                         # m/s
+# side_length = 1                # in units of m
+# radius_buffer = 0.1 * side_length           # in units of m
+# dt = 0.01                         # in units of seconds
+
 
 
 # Set initial positions and velocities
@@ -68,39 +77,63 @@ def apply_force_pp(p, v):
 def apply_force_pm(p, v):
     cell_num = 50
     rho = ngp(p, cell_num)
-    G = greens_function(cell_num)
     rho_ft = fftn(rho)
-    phi_ft = G * rho_ft
+
+    x = (np.linspace(-0.5, 0.5, cell_num + 1) + 0.5 / cell_num)[:-1]
+    y = (np.linspace(-0.5, 0.5, cell_num + 1) + 0.5 / cell_num)[:-1]
+    z = (np.linspace(-0.5, 0.5, cell_num + 1) + 0.5 / cell_num)[:-1]
+
+    grid_x, grid_y, grid_z = np.meshgrid(x, y, z)
+    k_x, k_y, k_z = 2 * np.pi * grid_x / side_length, 2 * np.pi * grid_y / side_length, 2 * np.pi * grid_z / side_length,
+    k_squared = k_x**2 + k_y**2 + k_z**2
+
+    phi_ft = -4 * np.pi * G * rho_ft / k_squared
+
     phi = ifftn(phi_ft)
-    a = np.diff(phi) / (side_length / cell_num)
+    phi = np.abs(phi)
 
+    g = np.gradient(phi)
+
+    # to_plot = np.sum(phi, axis=1)
+    # plt.close()
+    # plt.imshow(to_plot)
+    # plt.savefig('yep.png')
+    # exit()
+
+    x = (np.linspace(-0.5, 0.5, cell_num + 1) + 0.5 / cell_num)[:-1]
     for j in range(n_particles):
-        grid_position = np.zeros(n_dimensions)
+        coords = []
         for i in range(n_dimensions):
-            grid_position[i] = x[argmin(positions[i, j] - x)]
-        v[:, j] += a[grid_position]
-
+            coords.append(np.argmin(p[i, j] - x))
+        for i in range(n_dimensions):
+            v[i, j] = g[i][coords[0]][coords[1]][coords[2]]
     return p, v
 
 
 def ngp(positions, cell_num):
     """Gets a mass grid of the particles for a simple ngp method"""
-    x = (np.linspace(-0.5, 0.5, cell_num + 1) + 1 / cell_num)[:-1]
-    mass_grid = np.meshgrid(x, x, x)
+    x = (np.linspace(-0.5, 0.5, cell_num + 1) + 0.5 / cell_num)[:-1] * side_length
+    mass_grid = np.zeros([cell_num, cell_num, cell_num])
     for j in range(n_particles):
-        grid_position = np.zeros(n_dimensions)
+        grid_position = np.zeros(n_dimensions, dtype=int)
         for i in range(n_dimensions):
-            grid_position[i] = x[argmin(positions[i, j] - x)]
-        mass_grid[grid_position] += 1
+            grid_position[i] = int(np.argmin(np.abs(positions[i, j] - x)))
+        mass_grid[grid_position[0], grid_position[1], grid_position[2]] += 1  # not n-dimensional
     mass_grid = mass_grid * particle_mass
+
     return mass_grid
 
 
 def greens_function(cell_num):
-    k = 2 * np.pi * np.arange(0, cell_num + 1) / side_length
-    k_vec = np.array([k for i in range(n_dimensions)])
-    G = -3 / 8 * np.sum(np.sin(k_vec / 2) ** 2) ** -1
-    G[0, 0, 0] = 0
+    x = (np.linspace(-0.5, 0.5, cell_num + 1) + 0.5 / cell_num)[:-1] * side_length
+    k = 2 * np.pi * x / side_length
+    G = np.zeros([cell_num, cell_num, cell_num])
+    for l in range(cell_num):
+        for m in range(cell_num):
+            for n in range(cell_num):
+                G[l][m][n] = -3 / 8 * (np.sin(k[l] / 2)**2 +
+                                       np.sin(k[m] / 2)**2 +
+                                       np.sin(k[n] / 2)**2)**-1
     return G
 
 
@@ -121,12 +154,12 @@ def update(i):
     global position, velocity
     position += velocity * dt  # Increment positions according to their velocites
     position = apply_boundary(position)  # Apply boundary conditions
-    position, velocity = apply_force_pm(position, velocity)
+    position, velocity = apply_force_pp(position, velocity)
     points.set_data(position[0, :], position[1, :])  # Show 2D projection of first 2 position coordinates
     return points,
 
 
-ani = FuncAnimation(fig, update, frames=n_frames)
+ani = FuncAnimation(fig, update, frames=n_frames, interval=frame_duration)
 f = r"sim.mp4"
 writervideo = FFMpegWriter(fps=60)
 ani.save(f, writer=writervideo)
