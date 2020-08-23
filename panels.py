@@ -86,6 +86,8 @@ def update(i):
 ani = animation.FuncAnimation(fig, update, frames=Nt,interval = frame_duration)
 #plt.show()
 
+
+
 ani.save("panels.mp4")
 
 

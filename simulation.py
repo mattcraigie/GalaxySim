@@ -18,7 +18,7 @@ km_to_pc = 3.240e-14
 # Sim setup
 n_dimensions = 3
 n_particles = 1000
-n_frames = 100
+n_frames = 2000
 frame_duration = 100
 
 
@@ -32,16 +32,22 @@ frame_duration = 100
 
 # de-uniting
 particle_mass = 1            # kg
-G = 0.01                           # m^3 kg^-1 s^-2
-v_max = 0.05                         # m/s
+G = 1000                           # m^3 kg^-1 s^-2
+v_max = 0.0                         # m/s
 side_length = 1                # in units of m
-radius_buffer = 0.05 * side_length           # in units of m
+radius_buffer = 0.2 * side_length           # in units of m
 dt = 0.005                         # in units of seconds
-
+omega_0 = 1
+cosmo_a = 1
+cosmo_f = 1
 
 # Set initial positions and velocities
 position = side_length * (0.5 - np.random.random((n_dimensions, n_particles)))
+# position = side_length * (0.5 - np.array([np.linspace(0, 1, n_particles), np.linspace(0, 1, n_particles), np.linspace(0, 1, n_particles)]))
 velocity = v_max * (0.5 - np.random.random((n_dimensions, n_particles)))
+
+# frame counter
+frame = 0
 
 
 def apply_boundary(p):
@@ -60,21 +66,24 @@ def apply_force_pp(p, v):
             if n == m:
                 continue
 
-            distance_factor += pp_displacement(p[:, m], p[:, n])
+            distance_factor += pp_displacement(p[:, m], p[:, n], softening_length=radius_buffer)
         # this might also need some 4s and pis etc.
         v[:, m] += - G * particle_mass * distance_factor * dt
     return p, v
 
 
-def pp_displacement(p1, p2):
-    return (p1 - p2) / (np.linalg.norm(p1 - p2) ** n_dimensions + radius_buffer)
+def pp_displacement(p1, p2, softening_length):
+    return (p1 - p2) / (np.linalg.norm(p1 - p2) ** n_dimensions + softening_length)
 
 
 def apply_force_pm(p, v):
     cell_num = 50
     particle_coords = get_particle_coords(p, cell_num)
     rho = ngp(particle_coords, cell_num)
-    rho_ft = rfftn(rho, axes=(0,1,2))
+    rhobar = np.sum(rho) / side_length ** 3
+    delta = (rho - rhobar) / rhobar
+    delta_ft = rfftn(delta, axes=(0, 1, 2))
+
 
     x = (np.linspace(-0.5, 0.5, cell_num + 1) + 0.5 / cell_num)[:-1] * side_length
     pos_grid = np.array(np.meshgrid(x, x, x))
@@ -86,7 +95,11 @@ def apply_force_pm(p, v):
     k_grid = k_grid[:, :, :, :half]
     k_norm = k_norm[:, :, :half]
 
-    a_ft_grid = 4 * 1j * np.pi * G * rho_ft * k_grid / k_norm**2
+    phi_ft = greens_function(k_grid) * delta_ft
+
+    # phi = irfftn(phi_ft, axes=(0, 1, 2))
+
+    a_ft_grid = 4 * 1j * np.pi * G * phi_ft * k_grid
     a_grid = irfftn(a_ft_grid, axes=(1, 2, 3))
 
     # print(a_grid[:, 0, 0])
@@ -124,32 +137,37 @@ def apply_force_p3m(p, v):
             all_cells[tuple(particle_coord)] += [i]
 
     rho = ngp(particle_coords, cell_num)
-    rho_ft = rfftn(rho, axes=(0,1,2))
+    rhobar = np.sum(rho) / side_length**3
+    delta = (rho - rhobar) / rhobar
+    delta_ft = rfftn(delta, axes=(0, 1, 2))
+
 
     x = (np.linspace(-0.5, 0.5, cell_num + 1) + 0.5 / cell_num)[:-1] * side_length
     pos_grid = np.array(np.meshgrid(x, x, x))
     k_grid = 2 * np.pi * pos_grid / side_length
     k_norm = np.linalg.norm(k_grid, axis=0)
 
+
+
     # halving bc rfft is funny
     half = int(cell_num / 2 + 1)
     k_grid = k_grid[:, :, :, :half]
     k_norm = k_norm[:, :, :half]
 
-    a_ft_grid = 4 * 1j * np.pi * G * rho_ft * k_grid / k_norm**2
+    a_ft_grid = 4 * 1j * np.pi * G * delta_ft * k_grid / k_norm**2
     a_grid = irfftn(a_ft_grid, axes=(1, 2, 3))
 
-    # a_mag = np.linalg.norm(a_grid, axis=0)
-    # to_plot = np.sum(a_mag, axis=2)
+    # power_spectrum_from_density_ft(delta_ft, k_norm)
+
+    # to_plot = np.sum(np.linalg.norm(a_grid, axis=0), axis=2)
     #
     # plt.close()
     # plt.imshow(to_plot)
-    # plt.savefig('accelfield.png')
+    # plt.savefig('rho.png')
     #
     # exit()
 
-    # inside the range, subtract the mesh force and add the distance force
-    # outside the range, do nothing
+
 
     for j in range(n_particles):
         j_coords = particle_coords[:, j]
@@ -174,8 +192,8 @@ def apply_force_p3m(p, v):
                 nearby = all_cells[cell_idx]
                 cell_pos = ((local_cells[f]) / cell_num - 0.5) * side_length
                 for nb in nearby:
-                    distance_factor += pp_displacement(p[:, j], p[:, nb])
-                    distance_factor -= pp_displacement(p[:, j], cell_pos)
+                    distance_factor += pp_displacement(p[:, j], p[:, nb], softening_length=radius_buffer)
+                    distance_factor -= pp_displacement(p[:, j], cell_pos, softening_length=radius_buffer)
 
         pp_accel = - G * particle_mass * distance_factor
         v[:, j] += (pm_accel + pp_accel) * dt
@@ -204,19 +222,40 @@ def ngp(particle_coords, cell_num):
     return mass_grid
 
 
-def correlation_function_ls(p):
-    n_bins = 20
-    random_catalog_factor = 10
+def correlation_function_ls(p, bin_edges):
+    random_catalog_factor = 1
 
-    n_data = np.shape(p[1])
+    n_data = np.shape(p)[1]
     n_random_catalog = random_catalog_factor * n_data
 
     random = create_random_catalog(n_dimensions, n_random_catalog)
-    DD = two_point_count(catalog1=p, catalog2=p, n_bins=n_bins)
-    DR = two_point_count(catalog1=p, catalog2=random, n_bins=n_bins)
-    RR = two_point_count(catalog1=random, catalog2=random, n_bins=n_bins)
+    DD = two_point_count(catalog1=p, catalog2=p, bin_edges=bin_edges)
+    DR = two_point_count(catalog1=p, catalog2=random, bin_edges=bin_edges)
+    RR = two_point_count(catalog1=random, catalog2=random, bin_edges=bin_edges)
 
-    return (n_random_catalog / n_data)**2 * DD/RR - 2 * (n_random_catalog / n_data) * DD/DR + 1
+    corr_ls = (n_random_catalog / n_data)**2 * DD/RR - 2 * (n_random_catalog / n_data) * DD/DR + 1
+    corr_ls[np.isnan(corr_ls)] = 0
+    corr_ls[np.isinf(corr_ls)] = 0
+    # corr_ls[corr_ls < -0.999] = 0
+
+    return corr_ls
+
+
+def correlation_function_ph(p, bin_edges):
+    random_catalog_factor = 10
+
+    n_data = np.shape(p)[1]
+    n_random_catalog = random_catalog_factor * n_data
+
+    random = create_random_catalog(n_dimensions, n_random_catalog)
+    DD = two_point_count(catalog1=p, catalog2=p, bin_edges=bin_edges)
+    RR = two_point_count(catalog1=random, catalog2=random, bin_edges=bin_edges)
+
+    corr_ph = (n_random_catalog / n_data)**2 * DD/RR - 1
+    corr_ph[np.isnan(corr_ph)] = 0
+    corr_ph[np.isinf(corr_ph)] = 0
+    corr_ph[corr_ph < -0.999] = 0
+    return corr_ph, DD
 
 
 def create_random_catalog(n_dimensions, n_particles):
@@ -224,38 +263,96 @@ def create_random_catalog(n_dimensions, n_particles):
     return random_catalog
 
 
-def two_point_count(catalog1, catalog2, n_bins):
-    # slow way:
-    n_catalog1 = np.shape(catalog1[1])
-    n_catalog2 = np.shape(catalog2[1])
-
-    min_separation = 0
-    max_separation = side_length / np.sqrt(2)
-
-    bin_edges = np.linsapce(min_separation, max_separation, n_bins + 1)
-    counts = np.zeros(n_bins + 1)
-
-    # todo: stop double counting if catalog1 = catalog2
-    for i in range(n_catalog1):
-        distance_array = np.linalg.norm(catalog2 - catalog1[:, i])
-        counts_for_i, _ = np.histogram(distance_array, bins=bin_edges)
-        counts += counts_for_i
-
+def two_point_count(catalog1, catalog2, bin_edges):
+    distance_array = separation(catalog1, catalog2)
+    counts, _ = np.histogram(distance_array, bins=bin_edges)
     return counts
 
 
-# Define procedure to update positions at each timestep
+def separation(catalog1, catalog2):
+    s = catalog1[:, None, :] - catalog2[:, :, None]
+
+    sx = np.triu(s[0], k=1)
+    sx = sx[np.nonzero(sx)]
+
+    sy = np.triu(s[0], k=1)
+    sy = sy[np.nonzero(sy)]
+
+    sz = np.triu(s[0], k=1)
+    sz = sz[np.nonzero(sz)]
+
+    s = np.array([sx, sy, sz])
+    s = np.linalg.norm(s, axis=0)
+
+    return s
+
+
+def power_spectrum_from_density_ft(density_ft, k_norm):
+
+    print(np.shape(density_ft))
+    print(np.shape(k_norm))
+
+    n_bins = 100
+    bin_edges = np.linspace(np.min(k_norm), np.max(k_norm), n_bins + 1)
+    bin_mids = (bin_edges + (bin_edges[1] - bin_edges[0]))[:-1]
+    P = np.zeros(n_bins)
+
+    c1, c2, c3 = np.shape(density_ft)
+    for i in range(c1):
+        for j in range(c2):
+            for k in range(c3):
+                k_val = k_norm[i, j, k]
+                idx = np.argmin(np.abs(k_val - bin_mids))
+                P[idx] += np.abs(density_ft[i, j, k])**2
+
+    plt.close()
+    print(P)
+    plt.plot(bin_mids, P)
+    plt.savefig('power_spectrum')
+    exit()
+    return
+
+
+def greens_function(k_vec):
+    greens = -3 * omega_0 / (8 * cosmo_a) * np.linalg.norm(np.sin(k_vec), axis=0) ** -1
+    greens[0, 0, 0] = 0
+    return greens
+
+
+
 def update(i):
-    global position, velocity
-    position += velocity * dt  # Increment positions according to their velocites
-    position = apply_boundary(position)  # Apply boundary conditions
-    # print("")
-    # print(position, velocity)
-    apply_force_pp(position, velocity)
-    position, velocity = apply_force_p3m(position, velocity)
-    # print("")
-    # print(position, velocity)
-    points.set_data(position[1, :], position[2, :])  # Show 2D projection of first 2 position coordinates
+    global position, velocity, frame
+
+    frame += 1
+    # if frame == 2:
+    #
+    #     min_separation = 0
+    #     max_separation = side_length * np.sqrt(3)
+    #     n_bins = 100
+    #     bin_edges = np.linspace(min_separation, max_separation, n_bins + 1)
+    #     bin_middles = (bin_edges + bin_edges[1] - bin_edges[0])[:-1]
+    #     plt.close()
+    #     # plt.plot(bin_middles, correlation_function_ls(position, bin_edges))
+    #     corr_ph, dd = correlation_function_ph(position, bin_edges)
+    #     plt.plot(bin_middles, dd)
+    #     plt.savefig('dd.png')
+    #     plt.close()
+    #     plt.plot(bin_middles, corr_ph)
+    #     plt.savefig('corrfunc.png')
+    #
+    #     exit()
+    #     print(frame)
+
+    if frame % 10 == 0:
+        print(frame)
+
+    position += velocity * dt
+    position = apply_boundary(position)
+    position, velocity = apply_force_pm(position, velocity)
+
+    points.set_data(position[0, :], position[1, :])
+
+
     return points,
 
 
@@ -270,7 +367,7 @@ if __name__ == '__main__':
     points, = plt.plot([], [], 'o', markersize=5)
 
     ani = FuncAnimation(fig, update, frames=n_frames)# interval=frame_duration)
-    f = r"sim_p3m.mp4"
+    f = r"sim_pm.mp4"
     writervideo = FFMpegWriter(fps=60)
     ani.save(f, writer=writervideo)
 
