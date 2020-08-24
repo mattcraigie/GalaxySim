@@ -5,13 +5,15 @@ from scipy.fft import fftn, ifftn, rfftn, irfftn
 import matplotlib as mpl
 mpl.rcParams['animation.ffmpeg_path'] = r'C:\\Program Files (x86)\\FFMpeg\\bin\\ffmpeg.exe'
 
-from ..powerspectrum import power_spectrum
+import sys
+sys.path.append("C:\\Users\\matth\\PycharmProjects\\PHYS4080\\GalaxySim")
+
 
 np.random.seed(42)
 
 # Sim setup
-n_particles = 16**3
-n_frames = 500
+n_particles = 2
+n_frames = 100
 frame_duration = 100
 
 n_grid_cells = 50
@@ -32,7 +34,7 @@ phi_0 = v_0 ** 2
 
 # Set initial positions and velocities
 position = n_grid_cells * np.random.random((3, n_particles))
-# position = side_length * (0.5 - np.array([np.linspace(0, 1, n_particles), np.linspace(0, 1, n_particles), np.linspace(0, 1, n_particles)]))
+# position = n_grid_cells * (0.5 - np.array([np.linspace(0, 1, n_particles), np.linspace(0, 1, n_particles), np.zeros(n_particles)]))
 velocity = 10 * (0.5 - np.random.random((3, n_particles)))
 
 # position = np.array([[25., 35.], [0., 0.], [0., 0.]])
@@ -80,35 +82,31 @@ def assign_densities(p):
 
     return rho
 
+
 def apply_force_pm(p, v):
     rho = assign_densities(p)
     rhobar = (np.sum(rho) / n_grid_cells**3)
     delta = (rho - rhobar) / rhobar
-    delta_ft = rfftn(delta, axes=(0, 1, 2))
+    delta_ft = rfftn(delta, axes=(0, 1, 2)) #/ n_grid_cells**(2/3)
 
     phi_ft = delta_ft * greens
     phi = irfftn(phi_ft, axes=(0, 1, 2))
 
     g_field_slow = get_acceleration_field(phi)
 
-    # g_ft = -1j * k_grid * phi_ft
-    # g_field_fast = irfftn(g_ft, axes=(1, 2, 3))
-
     g_particle = assign_accelerations(p, g_field_slow)
 
-    k_bin, P = power_spectrum(delta_ft, k_norm, n_bins=20)
-    plt.close()
-    plt.plot(k_bin, P)
-    plt.savefig('pspectrum.png')
-    exit()
+    if plot_powerspectrum:
 
+        k_bin, P = power_spectrum(delta_ft, k_norm, n_bins=50, delta=delta)
+        r, xi = correlation_function(k_bin, P)
+        r = r * n_grid_cells
 
-    # gnorm = np.linalg.norm(g_field_slow, axis=0)
-    # print(np.max(gnorm))
-    # plt.close()
-    # plt.imshow(np.sum(gnorm, axis=0))
-    # plt.savefig('gslow.png')
-    # exit()
+        powspec.set_data(k_bin, P)
+        ax2.set_ylim([0, np.max(P) * 1.2])
+
+        corrfunc.set_data(range(len(xi)), xi)
+        ax3.set_ylim([np.min(xi) * 1.2, np.max(xi) * 1.2])
 
     v += g_particle * da
 
@@ -143,7 +141,6 @@ def assign_accelerations(p, g_field):
     return g
 
 
-
 def get_acceleration_field(phi):
     g = np.zeros((3, n_grid_cells, n_grid_cells, n_grid_cells), dtype=float)
 
@@ -171,6 +168,57 @@ def greens_function(k_vec):
     return greens
 
 
+### ~~~ Power Spectrum ~~~ ###
+
+
+def power_spectrum(delta_ft, k_norm, n_bins, delta):
+    bin_edges = np.linspace(np.min(k_norm), np.max(k_norm), n_bins + 1)
+    bin_width = bin_edges[1] - bin_edges[0]
+    bin_mids = (bin_edges + bin_width)[:-1]
+
+    alpha = 1
+
+    F_rvec = delta - alpha * delta_random
+    F_kvec = rfftn(F_rvec, axes=(0, 1, 2))
+
+    # F_kvec = delta_ft #- alpha * delta_ft_random
+    P_kvec = F_kvec * np.conj(F_kvec) #/ (2 * np.pi) ** 6
+    P = np.zeros(n_bins)
+
+    for i in range(n_bins):
+        condition = np.where(np.abs(k_norm - bin_mids[i]) < bin_width/2)
+        print(np.sum(condition))
+        P[i] = np.sum(P_kvec[condition]) / np.sum(condition)
+    # plt.close()
+    # plt.plot(bin_mids, P)
+    # plt.savefig('volume.png')
+    # exit()
+
+
+    return bin_mids, P
+
+
+def get_random_catalogue(alpha, n_sim):
+    rand_pos = np.random.random((3, alpha * n_sim))
+    rand_density = assign_densities(rand_pos)
+    return rand_density
+
+
+def correlation_function(k, P):
+    xi = np.fft.irfft(P)
+    # print(xi)
+    r = k / (2 * np.pi)
+    # print(r)
+    half = int(len(P))
+    xi = xi[half:]
+    # xi = savgol_filter(xi, 7, 3)
+
+    return r, xi
+
+
+def correlation_function_nsquared(p):
+
+
 def update(i):
     global position, velocity, frame, a
 
@@ -181,15 +229,17 @@ def update(i):
     position = apply_boundary(position)
     velocity = apply_force_pm(position, velocity)
 
-    points.set_data(position[0, :], position[1, :])
+    points_sim.set_data(position[0, :], position[1, :])
 
     a += da
     frame += 1
 
-    return points,
+    return points_sim,
 
 
 if __name__ == '__main__':
+
+    plot_powerspectrum = True
 
     x = np.arange(0, n_grid_cells)
     pos_grid = np.array(np.meshgrid(x, x, x))
@@ -202,18 +252,60 @@ if __name__ == '__main__':
 
     greens = greens_function(k_grid)
 
-    # Set the axes on which the points will be shown
-    plt.ion()  # Set interactive mode on
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.set_xlim(0, n_grid_cells)
-    ax.set_ylim(0, n_grid_cells)
+    alpha = 10
+    rho_random = get_random_catalogue(alpha, n_particles)
+    rhobar_random = (np.sum(rho_random) / n_grid_cells ** 3)
+    delta_random = (rho_random - rhobar_random) / rhobar_random
+    delta_ft_random = rfftn(delta_random, axes=(0, 1, 2))  # / n_grid_cells**(2/3)
 
-    # Create command which will plot the positions of the particles
-    points, = plt.plot([], [], 'o', markersize=1)
+    if plot_powerspectrum:
+        plt.ion()
 
-    ani = FuncAnimation(fig, update, frames=n_frames)# interval=frame_duration)
-    f = r"sim_pm.mp4"
-    writervideo = FFMpegWriter(fps=60)
-    ani.save(f, writer=writervideo)
+        fig = plt.figure(figsize=(12, 8), constrained_layout=True)
+        gs = fig.add_gridspec(2, 3)
+        ax1 = fig.add_subplot(gs[0:, 0:2])
+        ax1.set_title('Main Simulation')
+
+        ax2 = fig.add_subplot(gs[0, 2])
+        ax2.set_title('Power Spectrum')
+
+        ax3 = fig.add_subplot(gs[1, 2])
+        ax3.set_title('Correlation Function')
+
+        ax1.set_xlim(0, n_grid_cells)
+        ax1.set_ylim(0, n_grid_cells)
+
+        ax2.set_xlim(0, 10)
+        ax2.set_ylim(0, 10)
+
+        ax3.set_xlim(0, 50)
+        ax3.set_ylim(0, 10)
+
+        # Create command which will plot the positions of the particles
+        points_sim, = ax1.plot([], [], 'o', markersize=1)
+        powspec, = ax2.plot([], [], markersize=1)
+        corrfunc, = ax3.plot([], [], markersize=1)
+
+        ani = FuncAnimation(fig, update, frames=n_frames)  # interval=frame_duration)
+        f = r"sim_pm.mp4"
+        writervideo = FFMpegWriter(fps=60)
+        ani.save(f, writer=writervideo)
+
+    if not plot_powerspectrum:
+
+
+        # Set the axes on which the points will be shown
+        plt.ion()  # Set interactive mode on
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.set_xlim(0, n_grid_cells)
+        ax.set_ylim(0, n_grid_cells)
+
+        # Create command which will plot the positions of the particles
+        points_sim, = plt.plot([], [], 'o', markersize=1)
+
+        ani = FuncAnimation(fig, update, frames=n_frames)# interval=frame_duration)
+        f = r"sim_pm.mp4"
+        writervideo = FFMpegWriter(fps=60)
+        ani.save(f, writer=writervideo)
 
 
